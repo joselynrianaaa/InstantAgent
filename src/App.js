@@ -244,11 +244,15 @@ function App() {
           style={{
             margin: 0,
             fontSize: "2rem",
-            fontWeight: 1000,
+            fontWeight: 800,
             fontFamily: "'Poppins', sans-serif",
           }}
         >
+<<<<<<< HEAD
           InstantAgent
+=======
+          Instant Agent Creator
+>>>>>>> 534f71fa8663de757c6cb9584f1ec348b9fc1afb
         </h1>
 
         {/* Name Dropdown Badge */}

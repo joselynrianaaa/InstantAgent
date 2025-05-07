@@ -75,11 +75,16 @@ const AgentForm = ({ onSubmit, isLoading }) => {
           className="form-control custom-textarea"
           style={inputStyle}
           value={formData.goal}
-          onChange={handleChange}
+          onChange={(e) => {
+            handleChange(e);
+            e.target.style.height = 'auto';
+            e.target.style.height = `${e.target.scrollHeight}px`;
+          }}
           placeholder="Describe the agent's goal..."
           required
-          rows="3"
+          rows={1}
         />
+
       </div>
 
       <div className="mb-3">
