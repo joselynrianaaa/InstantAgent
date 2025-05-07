@@ -1,4 +1,4 @@
-# Agent Creation App
+# InstantAgent
 
 A web application for creating AI agents using Together AI's API.
 
