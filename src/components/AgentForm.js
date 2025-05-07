@@ -1,18 +1,20 @@
 import React, { useState } from "react";
 
 const AgentForm = ({ onSubmit, isLoading }) => {
-  const [formData, setFormData] = useState({
-    goal: "",
-    model: "mistralai/Mixtral-8x7B-Instruct-v0.1",
-    tools: [],
-  });
-
   const availableModels = [
     { id: "mistralai/Mixtral-8x7B-Instruct-v0.1", name: "Mixtral 8x7B" },
-    { id: "meta-llama/Llama-2-70b-chat-hf", name: "Llama-2 70B" },
-    { id: "togethercomputer/llama-2-7b-chat", name: "Llama-2 7B" },
-    { id: "google/gemma-7b-it", name: "Gemma 7B" },
+    { id: "mistralai/Mistral-7B-Instruct-v0.2", name: "Mistral 7B" },
+    { id: "stabilityai/stable-diffusion-2-1", name: "Stable Diffusion 2.1" },
   ];
+
+  // Use the first model as default
+  const defaultModel = availableModels.length > 0 ? availableModels[0].id : "";
+
+  const [formData, setFormData] = useState({
+    goal: "",
+    model: defaultModel,
+    tools: [],
+  });
 
   const availableTools = [
     { id: "search", name: "Search" },
@@ -85,42 +87,41 @@ const AgentForm = ({ onSubmit, isLoading }) => {
           Model:
         </label>
         <div style={{ position: "relative" }}>
-  <select
-    id="model"
-    name="model"
-    className="form-select"
-    style={{
-      ...inputStyle,
-      appearance: "none", // remove native arrow
-      paddingRight: "2rem",
-    }}
-    value={formData.model}
-    onChange={handleChange}
-    required
-  >
-    {availableModels.map((model) => (
-      <option key={model.id} value={model.id}>
-        {model.name}
-      </option>
-    ))}
-  </select>
+          <select
+            id="model"
+            name="model"
+            className="form-select"
+            style={{
+              ...inputStyle,
+              appearance: "none", // remove native arrow
+              paddingRight: "2rem",
+            }}
+            value={formData.model}
+            onChange={handleChange}
+            required
+          >
+            {availableModels.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.name}
+              </option>
+            ))}
+          </select>
 
-  {/* Dropdown Arrow */}
-  <div
-    style={{
-      position: "absolute",
-      right: "20px",
-      top: "50%",
-      transform: "translateY(-50%)",
-      pointerEvents: "none",
-      color: "white",
-      fontSize: "1rem",
-    }}
-  >
-    ▼
-  </div>
-</div>
-
+          {/* Dropdown Arrow */}
+          <div
+            style={{
+              position: "absolute",
+              right: "20px",
+              top: "50%",
+              transform: "translateY(-50%)",
+              pointerEvents: "none",
+              color: "white",
+              fontSize: "1rem",
+            }}
+          >
+            ▼
+          </div>
+        </div>
       </div>
 
       <div className="mb-3">
