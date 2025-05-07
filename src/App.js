@@ -62,6 +62,10 @@ function App() {
       const result = await Promise.race([
         axios.post("http://127.0.0.1:8000/create-agent", formData, {
           timeout: 90000,
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
           onUploadProgress: () => {
             setLoadingStage("Sending request to create agent...");
           },
@@ -189,6 +193,7 @@ function App() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Accept: "application/json",
         },
         body: JSON.stringify({
           goal: goal,
@@ -243,7 +248,7 @@ function App() {
             fontFamily: "'Poppins', sans-serif",
           }}
         >
-          Agent Creation App
+          InstantAgent
         </h1>
 
         {/* Name Dropdown Badge */}
@@ -429,6 +434,27 @@ function App() {
           </>
         ) : (
           <div className="chat-container">
+            <div className="d-flex justify-content-between align-items-center mb-3">
+              <button
+                className="btn btn-secondary"
+                onClick={() => setShowChat(false)}
+                style={{
+                  backgroundColor: "#3a3a3a",
+                  border: "none",
+                  padding: "8px 16px",
+                  borderRadius: "8px",
+                  color: "#fff",
+                }}
+              >
+                ← Back to Create Agent
+              </button>
+              <h4 style={{ margin: 0, color: "#fff" }}>
+                {agents.find((agent) => agent.id === activeAgent)?.name ||
+                  "Chat"}
+              </h4>
+              <div style={{ width: "120px" }}></div>{" "}
+              {/* Spacer for alignment */}
+            </div>
             <ChatComponent
               agentId={activeAgent}
               agentDetails={agents.find((agent) => agent.id === activeAgent)}
