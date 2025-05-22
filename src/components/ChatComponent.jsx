@@ -2,240 +2,95 @@ import React, { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import axios from "axios";
 
-const ChatComponent = ({ agentId, agentDetails }) => {
-  const [messages, setMessages] = useState([]);
+const ChatComponent = ({
+  agentId,
+  agentDetails,
+  initialMessages,
+  onUpdateMessages,
+}) => {
+  // Initialize with welcome message or existing chat
+  const [messages, setMessages] = useState(() => {
+    if (initialMessages && initialMessages.length > 0) {
+      return initialMessages;
+    }
+    return [
+      {
+        sender: "agent",
+        text: "👋 Hello! Let me assist you.",
+      },
+    ];
+  });
+
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isImageModel, setIsImageModel] = useState(false);
   const chatContainerRef = useRef(null);
-  const isFirstMount = useRef(true);
+  const previousAgentId = useRef(agentId);
 
-  // Function to generate welcome message with emojis based on agent goal
-  const generateWelcomeMessage = (goal, isImageModel) => {
-    if (!goal) return "👋 Hello! How can I help you today?";
-
-    // Default emoji based on goal content
-    let emoji = "👋";
-
-    // Determine emoji based on goal keywords
-    const goalLower = goal.toLowerCase();
-    if (
-      goalLower.includes("travel") ||
-      goalLower.includes("vacation") ||
-      goalLower.includes("trip")
-    ) {
-      emoji = "✈️";
-    } else if (
-      goalLower.includes("food") ||
-      goalLower.includes("recipe") ||
-      goalLower.includes("cook")
-    ) {
-      emoji = "🍳";
-    } else if (
-      goalLower.includes("code") ||
-      goalLower.includes("program") ||
-      goalLower.includes("develop")
-    ) {
-      emoji = "💻";
-    } else if (
-      goalLower.includes("math") ||
-      goalLower.includes("calculate") ||
-      goalLower.includes("equation")
-    ) {
-      emoji = "🧮";
-    } else if (
-      goalLower.includes("write") ||
-      goalLower.includes("story") ||
-      goalLower.includes("blog")
-    ) {
-      emoji = "✍️";
-    } else if (
-      goalLower.includes("health") ||
-      goalLower.includes("fitness") ||
-      goalLower.includes("exercise")
-    ) {
-      emoji = "💪";
-    } else if (
-      goalLower.includes("music") ||
-      goalLower.includes("song") ||
-      goalLower.includes("playlist")
-    ) {
-      emoji = "🎵";
-    } else if (
-      goalLower.includes("art") ||
-      goalLower.includes("design") ||
-      goalLower.includes("creative")
-    ) {
-      emoji = "🎨";
-    }
-
-    if (isImageModel) {
-      return `${emoji} Welcome! I'm ready to generate images for you based on your descriptions. What would you like me to create today?`;
-    }
-
-    // Create a grammatically correct welcome message based on goal
-    // Format the goal into a proper sentence
-    let formattedMessage = "";
-
-    // Handle different phrasing based on how the goal is structured
-    if (goalLower.startsWith("help") || goalLower.startsWith("assist")) {
-      formattedMessage = `${emoji} Hello! I'm your assistant ready to ${goal}. How can I help you today?`;
-    } else if (
-      goalLower.startsWith("create") ||
-      goalLower.startsWith("make") ||
-      goalLower.startsWith("build")
-    ) {
-      formattedMessage = `${emoji} Hello! I'm your assistant ready to help you ${goal}. What would you like to know?`;
-    } else if (
-      goalLower.startsWith("answer") ||
-      goalLower.startsWith("provide")
-    ) {
-      formattedMessage = `${emoji} Hello! I'm your assistant ready to ${goal}. What questions do you have?`;
-    } else if (goalLower.includes("plan") || goalLower.includes("planning")) {
-      formattedMessage = `${emoji} Hello! I'm your assistant for planning ${goal.replace(
-        /^plan\s|planning\s/i,
-        ""
-      )}. How can I assist you today?`;
-    } else {
-      // Default format that works with most goals
-      formattedMessage = `${emoji} Hello! I'm your assistant for ${goal}. I'm here to help you. How can I assist you today?`;
-    }
-
-    return formattedMessage;
-  };
-
-  // Create welcome message when component mounts or when agentDetails change
+  // Handle agent switching
   useEffect(() => {
-    if (agentDetails && isFirstMount.current) {
-      // Display a welcome message with emoji based on agent goal
-      const welcomeMessage = {
-        sender: "agent",
-        text: generateWelcomeMessage(agentDetails.description, isImageModel),
-      };
-
-      // Only set this on first mount
-      if (isFirstMount.current) {
-        isFirstMount.current = false;
-        // This will be replaced by the checkAgentType response if it's successful
-        setMessages([welcomeMessage]);
+    if (previousAgentId.current !== agentId) {
+      if (initialMessages && initialMessages.length > 0) {
+        setMessages(initialMessages);
+      } else {
+        setMessages([
+          {
+            sender: "agent",
+            text: "👋 Hello! Let me assist you.",
+          },
+        ]);
       }
+      previousAgentId.current = agentId;
     }
-  }, [agentDetails, isImageModel]);
+  }, [agentId, initialMessages]);
 
-  // Check if this is an image model when component mounts
+  // Update parent with new messages
   useEffect(() => {
-    const checkAgentType = async (retryAttempt = 0) => {
+    onUpdateMessages(messages);
+  }, [messages, onUpdateMessages]);
+
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop =
+        chatContainerRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  // Check if this is an image model
+  useEffect(() => {
+    const checkAgentType = async () => {
+      if (!agentId) return;
+
       try {
-        console.log(`Checking agent type (attempt ${retryAttempt + 1})...`);
-
-        // Use a simple query that doesn't affect the agent's state
-        const message =
-          retryAttempt > 0
-            ? "Hello, are you an image generation model?"
-            : "What kind of model are you?";
-
-        // Add a timeout to the fetch to prevent hanging
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-
-        // Make a request to get the first message which contains the agent type
         const res = await axios.post(
           "http://localhost:8000/chat-agent",
-          { agent_id: agentId, message },
-          {
-            timeout: 10000,
-            signal: controller.signal,
-          }
+          { agent_id: agentId, message: "What kind of model are you?" },
+          { timeout: 10000 }
         );
 
-        clearTimeout(timeoutId);
-
-        const data = res.data;
-        console.log("Agent type check response:", data);
-
-        // Check if response has valid data
-        if (
-          data &&
-          data.choices &&
-          data.choices.length > 0 &&
-          data.choices[0].message
-        ) {
-          const messageContent = data.choices[0].message.content || "";
-
-          // Check if this is an image model from the response
-          if (
-            data.is_image_model ||
-            messageContent.toLowerCase().includes("image generation") ||
-            messageContent.toLowerCase().includes("stable diffusion")
-          ) {
-            setIsImageModel(true);
-
-            // Add initial welcome message for image model with the goal
-            const initialMessage = {
-              sender: "agent",
-              text: agentDetails
-                ? generateWelcomeMessage(agentDetails.description, true)
-                : messageContent,
-            };
-            setMessages([initialMessage]);
-          } else {
-            // For non-image models, show goal-based welcome message
-            const initialMessage = {
-              sender: "agent",
-              text: agentDetails
-                ? generateWelcomeMessage(agentDetails.description, false)
-                : messageContent ||
-                  "Hello! I'm your AI assistant. How can I help you today?",
-            };
-            setMessages([initialMessage]);
-          }
-        } else if (retryAttempt < 2) {
-          // If no valid response and we haven't exceeded retries, try again
-          console.log("No valid response from agent, retrying...");
-          setTimeout(() => checkAgentType(retryAttempt + 1), 2000);
-          return;
-        } else {
-          // Final fallback message after retries with goal-based customization
-          const errorMessage = {
-            sender: "agent",
-            text: agentDetails
-              ? generateWelcomeMessage(agentDetails.description, false)
-              : "👋 Hello! I'm your AI assistant. There was a small issue connecting, but I'm ready to help now.",
-          };
-          setMessages([errorMessage]);
+        if (res.data?.choices?.[0]?.message?.content) {
+          const messageContent = res.data.choices[0].message.content;
+          setIsImageModel(
+            res.data.is_image_model ||
+              messageContent.toLowerCase().includes("image generation") ||
+              messageContent.toLowerCase().includes("stable diffusion")
+          );
         }
       } catch (error) {
         console.error("Error checking agent type:", error);
-
-        if (retryAttempt < 2) {
-          // If error and we haven't exceeded retries, try again
-          console.log(
-            `Error checking agent type, retrying (${retryAttempt + 1}/2)...`
-          );
-          setTimeout(() => checkAgentType(retryAttempt + 1), 2000);
-          return;
-        }
-
-        // Final fallback after retries
-        const errorMessage = {
-          sender: "agent",
-          text: agentDetails
-            ? generateWelcomeMessage(agentDetails.description, false)
-            : "👋 Hello! I'm ready to assist you. There was a connection issue, but we can still chat.",
-        };
-        setMessages([errorMessage]);
       }
     };
 
     checkAgentType();
-  }, [agentId, agentDetails]);
+  }, [agentId]);
 
   const sendMessage = async (retryCount = 0) => {
     if (!input.trim() && retryCount === 0) return;
 
     // On first attempt, add user message and clear input
     if (retryCount === 0) {
-      const userMessage = { sender: "user", text: input };
+      const userMessage = { sender: "user", text: input.trim() };
       setMessages((prev) => [...prev, userMessage]);
       setInput("");
     }
@@ -252,11 +107,10 @@ const ChatComponent = ({ agentId, agentDetails }) => {
       const messageToSend =
         retryCount > 0
           ? messages[messages.length - 2].text // Get the last user message
-          : input;
+          : input.trim();
 
-      // Create a timeout for the fetch request
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
 
       const res = await fetch(endpoint, {
         method: "POST",
@@ -265,7 +119,6 @@ const ChatComponent = ({ agentId, agentDetails }) => {
         signal: controller.signal,
       });
 
-      // Clear the timeout since request completed
       clearTimeout(timeoutId);
 
       if (!res.ok) {
@@ -273,80 +126,56 @@ const ChatComponent = ({ agentId, agentDetails }) => {
       }
 
       const data = await res.json();
-      console.log("Server response:", data);
 
-      // Check if we got a valid response with content
-      let agentReply =
-        "Sorry, I couldn't generate a response. Please try again.";
+      let agentReply = null;
       let imageUrl = null;
 
-      let validResponse = false;
+      // Only process response if we have valid content
+      if (data?.choices?.[0]?.message?.content?.trim()) {
+        agentReply = data.choices[0].message.content;
 
-      if (data.choices && data.choices.length > 0 && data.choices[0].message) {
-        if (
-          data.choices[0].message.content &&
-          data.choices[0].message.content !== "No response" &&
-          data.choices[0].message.content.trim() !== ""
-        ) {
-          agentReply = data.choices[0].message.content;
-          validResponse = true;
-
-          // Check if there's an image URL in the response
-          if (data.choices[0].message.image_url) {
-            imageUrl = data.choices[0].message.image_url;
-          } else if (data.data && data.data.length > 0 && data.data[0].url) {
-            imageUrl = data.data[0].url;
-          }
+        // Check for image URL
+        if (data.choices[0].message.image_url) {
+          imageUrl = data.choices[0].message.image_url;
+        } else if (data.data?.[0]?.url) {
+          imageUrl = data.data[0].url;
         }
       }
 
-      const botMessage = {
-        sender: "agent",
-        text: agentReply,
-        imageUrl: imageUrl,
-      };
-
-      setMessages((prev) => [...prev, botMessage]);
-
-      // If we didn't get a valid response and haven't exceeded retries, try again
-      if (!validResponse && retryCount < 2) {
-        console.log(
-          `No valid response received, retrying (${retryCount + 1}/2)...`
-        );
-        setTimeout(() => sendMessage(retryCount + 1), 2000); // Wait 2 seconds before retry
+      // Only add message if we have content
+      if (agentReply) {
+        const botMessage = {
+          sender: "agent",
+          text: agentReply,
+          ...(imageUrl && { imageUrl }),
+        };
+        setMessages((prev) => [...prev, botMessage]);
+      } else if (retryCount < 2) {
+        setTimeout(() => sendMessage(retryCount + 1), 2000);
         return;
       }
     } catch (error) {
       console.error("Error sending message:", error);
 
-      // If timeout or network error and we haven't exceeded retries, try again
       if (
         (error.name === "AbortError" || error.name === "TypeError") &&
         retryCount < 2
       ) {
-        console.log(`Request failed, retrying (${retryCount + 1}/2)...`);
-        setTimeout(() => sendMessage(retryCount + 1), 2000); // Wait 2 seconds before retry
+        setTimeout(() => sendMessage(retryCount + 1), 2000);
         return;
       }
 
-      const botMessage = {
+      const errorMessage = {
         sender: "agent",
         text: `❓ Error: ${
           error.message || "Failed to communicate with agent."
         }`,
       };
-      setMessages((prev) => [...prev, botMessage]);
+      setMessages((prev) => [...prev, errorMessage]);
     } finally {
       setIsTyping(false);
     }
   };
-
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop =
-        chatContainerRef.current.scrollHeight;
-    }
-  }, [messages, isTyping]);
 
   return (
     <div
@@ -375,21 +204,42 @@ const ChatComponent = ({ agentId, agentDetails }) => {
             style={{
               display: "flex",
               justifyContent: msg.sender === "user" ? "flex-end" : "flex-start",
-              marginBottom: "10px",
+              marginBottom: "20px",
+              position: "relative",
             }}
           >
             <div
               style={{
-                background: msg.sender === "user" ? "#0d6efd" : "#444654",
-                padding: "10px 14px",
-                borderRadius: "10px",
-                maxWidth: "80%",
-                whiteSpace: "pre-wrap",
-                color: "#fff",
-                boxShadow: "0 1px 5px rgba(0,0,0,0.2)",
+                position: "absolute",
+                top: "-20px",
+                [msg.sender === "user" ? "right" : "left"]: "10px",
+                fontSize: "0.8rem",
+                color: "#888",
               }}
             >
-              <ReactMarkdown>{msg.text}</ReactMarkdown>
+              {msg.sender === "user" ? "You" : "Assistant"}
+            </div>
+            <div
+              style={{
+                background: msg.sender === "user" ? "#2563eb" : "#1e1e1e",
+                padding: "15px 20px",
+                borderRadius: "15px",
+                maxWidth: "85%",
+                whiteSpace: "pre-wrap",
+                color: "#fff",
+                boxShadow: "0 2px 5px rgba(0,0,0,0.1)",
+                border: msg.sender === "user" ? "none" : "1px solid #333",
+              }}
+            >
+              <ReactMarkdown
+                components={{
+                  p: ({ children }) => (
+                    <p style={{ margin: "0", lineHeight: "1.5" }}>{children}</p>
+                  ),
+                }}
+              >
+                {msg.text}
+              </ReactMarkdown>
               {msg.imageUrl && (
                 <div style={{ marginTop: "10px" }}>
                   <img
@@ -407,42 +257,59 @@ const ChatComponent = ({ agentId, agentDetails }) => {
           </div>
         ))}
         {isTyping && (
-          <div style={{ color: "#aaa", fontStyle: "italic" }}>
-            {isImageModel ? "Generating image..." : "Agent is typing..."}
+          <div
+            style={{
+              color: "#888",
+              fontStyle: "italic",
+              padding: "10px",
+              background: "#1e1e1e",
+              borderRadius: "10px",
+              display: "inline-block",
+              marginTop: "10px",
+            }}
+          >
+            {isImageModel ? "Generating image..." : "Assistant is typing..."}
           </div>
         )}
       </div>
 
-      <div style={{ display: "flex" }}>
+      <div style={{ display: "flex", marginTop: "20px" }}>
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={
-            isImageModel ? "Describe the image you want..." : "Say something..."
+            isImageModel
+              ? "Describe the image you want..."
+              : "Type your message..."
           }
           style={{
             flexGrow: 1,
-            padding: "12px",
-            borderRadius: "8px",
-            border: "none",
+            padding: "15px",
+            borderRadius: "10px",
+            border: "1px solid #333",
             outline: "none",
             fontSize: "1rem",
-            background: "#202123",
+            background: "#1e1e1e",
             color: "#fff",
+            marginRight: "10px",
           }}
           onKeyDown={(e) => e.key === "Enter" && sendMessage()}
         />
         <button
           onClick={sendMessage}
           style={{
-            marginLeft: "10px",
-            padding: "12px 18px",
-            background: "#0d6efd",
+            padding: "15px 25px",
+            background: "#2563eb",
             color: "#fff",
             border: "none",
-            borderRadius: "8px",
+            borderRadius: "10px",
             cursor: "pointer",
+            fontSize: "1rem",
+            fontWeight: "500",
+            transition: "background 0.2s",
           }}
+          onMouseOver={(e) => (e.currentTarget.style.background = "#1d4ed8")}
+          onMouseOut={(e) => (e.currentTarget.style.background = "#2563eb")}
         >
           {isImageModel ? "Generate" : "Send"}
         </button>

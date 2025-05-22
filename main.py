@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional
@@ -9,7 +9,8 @@ import logging
 from fastapi.middleware.cors import CORSMiddleware
 import uuid
 from datetime import datetime
-from fastapi import Request
+from database import SessionLocal, User, Agent, Message, get_db
+from sqlalchemy.orm import Session
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -51,6 +52,7 @@ class AgentRequest(BaseModel):
     goal: str
     model: str
     tools: Optional[List[str]] = []
+    user_name: Optional[str] = None  # Add user_name field
 
 class ChatRequest(BaseModel):
     agent_id: str
@@ -66,7 +68,7 @@ async def root():
     return {"message": "Welcome to the Agent Creation API. Use POST /create-agent to create a new agent."}
 
 @app.post("/create-agent")
-async def create_agent(request: AgentRequest):
+async def create_agent(request: AgentRequest, db: Session = Depends(get_db)):
     try:
         logger.info(f"Received request to create agent with goal: {request.goal}")
         
@@ -76,21 +78,36 @@ async def create_agent(request: AgentRequest):
         if not request.model:
             raise HTTPException(status_code=400, detail="Model name is required")
             
-        together_api_key = os.getenv("TOGETHER_API_KEY")
-        if not together_api_key:
-            logger.error("Together API key not found in environment variables")
-            raise HTTPException(status_code=500, detail="Together API key not found in environment variables")
-
-        # Check if this is an image generation model
-        if "stable-diffusion" in request.model.lower():
-            return await handle_image_generation_model(request, together_api_key)
+        # Create or get user
+        user = None
+        if request.user_name:
+            user = db.query(User).filter(User.name == request.user_name).first()
+            if not user:
+                user = User(name=request.user_name)
+                db.add(user)
+                db.commit()
+                db.refresh(user)
         
+        # Generate agent ID
+        agent_id = str(uuid.uuid4())
+        
+        # Prepare API request
         system_prompt = f"You are an agent with the goal: {request.goal}"
         user_message = "Hello agent, tell me what you can do."
         
-        logger.info(f"Calling Together API with model: {request.model}")
-        
-        # Prepare standard request body
+        # Determine API endpoint and key based on model
+        if "openai" in request.model.lower():
+            api_endpoint = "https://openrouter.ai/api/v1/chat/completions"
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise HTTPException(status_code=500, detail="OpenAI API key not found")
+        else:
+            api_endpoint = "https://api.together.xyz/v1/chat/completions"
+            api_key = os.getenv("TOGETHER_API_KEY")
+            if not api_key:
+                raise HTTPException(status_code=500, detail="Together API key not found")
+
+        # Prepare request body
         request_body = {
             "model": request.model,
             "messages": [
@@ -99,151 +116,104 @@ async def create_agent(request: AgentRequest):
             ]
         }
         
-        # Define default API endpoint for chat API
-        api_endpoint = "https://api.together.xyz/v1/chat/completions"
-        
-        # Add model-specific parameters if needed
-        if "mixtral" in request.model.lower():
-            # Mixtral models - updated configuration
-            logger.info("Using updated configuration for Mixtral model")
+        # Add model-specific parameters
+        if "openai" in request.model.lower():
             request_body.update({
-                "temperature": 0.75,  # Slightly higher temperature for more creative responses
-                "max_tokens": 600,    # Limiting token length to encourage conciseness
-                "top_p": 0.9,
-                "stop": ["USER:", "ASSISTANT:"],  # Add stop tokens to prevent model confusion
-                "frequency_penalty": 0.2,  # Increased to reduce repetition
-                "presence_penalty": 0.4    # Increased to encourage varied language
+                "temperature": 0.7,
+                "max_tokens": 500
             })
-            
-            # Add friendly, emoji-using instructions to the system prompt
-            if request_body["messages"] and request_body["messages"][0]["role"] == "system":
-                original_goal = request_body["messages"][0]["content"]
-                if "You are" not in original_goal:
-                    request_body["messages"][0]["content"] = f"""You are a friendly and helpful AI assistant with the following goal: {original_goal}
-                    
-Important guidelines for your responses:
-1. Be friendly and conversational 
-2. Use at most 1-2 emojis per message (not more)
-3. Keep your responses concise and to the point (under 3 sentences when possible)
-4. Focus on providing direct answers first, then elaborating only if necessary
-5. Be helpful and informative while maintaining a positive tone"""
-        
-        logger.info(f"Create agent API request body: {request_body}")
+        elif "mixtral" in request.model.lower():
+            request_body.update({
+                "temperature": 0.75,
+                "max_tokens": 600,
+                "top_p": 0.9,
+                "stop": ["USER:", "ASSISTANT:"],
+                "frequency_penalty": 0.2,
+                "presence_penalty": 0.4
+            })
+
         logger.info(f"Using API endpoint: {api_endpoint}")
         
-        try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(
-                    api_endpoint,
-                    headers={
-                        "Authorization": f"Bearer {together_api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json=request_body
+        # Make API call
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            headers = {
+                "Content-Type": "application/json"
+            }
+            
+            if "openai" in request.model.lower():
+                headers["Authorization"] = f"Bearer {api_key}"
+                headers["HTTP-Referer"] = "https://instantagent.app"
+                headers["X-Title"] = "InstantAgent"
+            else:
+                headers["Authorization"] = f"Bearer {api_key}"
+            
+            response = await client.post(
+                api_endpoint,
+                headers=headers,
+                json=request_body
+            )
+            
+            if response.status_code != 200:
+                error_text = response.text
+                logger.error(f"API Error: {error_text}")
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"API Error: {error_text}"
                 )
-                
-                logger.info(f"Together API response status: {response.status_code}")
-                
-                if response.status_code != 200:
-                    error_text = response.text
-                    logger.error(f"Error with model {request.model}: {error_text}")
-                    
-                    # Try to parse the error response to provide more helpful messages
-                    try:
-                        error_json = response.json()
-                        if "error" in error_json:
-                            error_detail = error_json["error"].get("message", "Unknown error")
-                            if "quota" in error_detail.lower() or "rate" in error_detail.lower():
-                                detail = f"API rate limit or quota exceeded for {request.model}. Please try again later."
-                            elif "not found" in error_detail.lower() or "unavailable" in error_detail.lower():
-                                detail = f"The model {request.model} appears to be unavailable. Please try a different model."
-                            else:
-                                detail = f"Error with model {request.model}: {error_detail}"
-                        else:
-                            detail = f"Error calling Together API with model {request.model}: {error_text}"
-                    except:
-                        detail = f"Error calling Together API with model {request.model}: {error_text}"
-                    
-                    raise HTTPException(status_code=response.status_code, detail=detail)
-                
-                # Generate a unique ID for this agent
-                agent_id = str(uuid.uuid4())
-                
-                # Store conversation history and agent metadata
-                conversations[agent_id] = {
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_message}
-                    ],
-                    "model": request.model,  # Store the model information
-                    "goal": request.goal,    # Store the goal for reference
-                    "tools": request.tools   # Store the tools for reference
-                }
-                
-                # Get the assistant's response
-                api_response = response.json()
-                logger.info(f"API response structure: {list(api_response.keys())}")
-                
-                # Handle different response formats based on API endpoint
-                if "choices" in api_response and len(api_response["choices"]) > 0:
-                    assistant_message = api_response["choices"][0]["message"]
-                    conversations[agent_id]["messages"].append(assistant_message)
-                
-                # Include agent_id in response
-                result = {
-                    "agent_id": agent_id,
-                    **api_response
-                }
-                
-                return result
-                
-        except httpx.RequestError as exc:
-            error_detail = f"HTTP Request error: {str(exc)}"
-            logger.error(error_detail)
             
-            # Create a fallback response instead of failing completely
-            fallback_message = {
-                "role": "assistant",
-                "content": "🔄 Connection hiccup! The server seems busy right now. Let's try again in a moment - I'm eager to help you!"
+            api_response = response.json()
+            
+            # Create the agent in database
+            agent = Agent(
+                id=agent_id,
+                user_id=user.id if user else None,
+                name=request.goal[:100],  # Use first 100 chars of goal as initial name
+                model=request.model,
+                goal=request.goal
+            )
+            if request.tools:
+                agent.set_tools(request.tools)
+            db.add(agent)
+            
+            # Store the conversation messages
+            messages = [
+                Message(
+                    agent_id=agent_id,
+                    role="system",
+                    content=system_prompt
+                ),
+                Message(
+                    agent_id=agent_id,
+                    role="user",
+                    content=user_message
+                )
+            ]
+            
+            if "choices" in api_response and len(api_response["choices"]) > 0:
+                assistant_message = Message(
+                    agent_id=agent_id,
+                    role="assistant",
+                    content=api_response["choices"][0]["message"]["content"]
+                )
+                messages.append(assistant_message)
+            
+            # Add all messages to database
+            for message in messages:
+                db.add(message)
+            
+            db.commit()
+            
+            # Return the response
+            return {
+                "agent_id": agent_id,
+                "choices": api_response.get("choices", [])
             }
             
-            # Add the fallback message to conversation history
-            conversations[agent_id]["messages"].append(fallback_message)
-            
-            # Return a proper response structure with the fallback message
-            fallback_response = {
-                "choices": [{"message": fallback_message, "index": 0, "finish_reason": "error"}],
-                "model": request.model,
-                "error": error_detail
-            }
-            
-            return fallback_response
-        except Exception as e:
-            error_detail = f"Unexpected error: {str(e)}"
-            logger.error(error_detail)
-            
-            # Create a fallback response for general errors
-            fallback_message = {
-                "role": "assistant", 
-                "content": "⚡ Something unexpected happened! Could you try a shorter message or different wording? I'm here and ready to help! 👍"
-            }
-            
-            # Add the fallback message to conversation history
-            conversations[agent_id]["messages"].append(fallback_message)
-            
-            # Return a proper response structure with the fallback message
-            fallback_response = {
-                "choices": [{"message": fallback_message, "index": 0, "finish_reason": "error"}],
-                "model": request.model,
-                "error": error_detail
-            }
-            
-            return fallback_response
-
+    except HTTPException:
+        raise
     except Exception as e:
-        error_detail = f"Unexpected error: {str(e)}"
-        logger.error(error_detail)
-        raise HTTPException(status_code=500, detail=error_detail)
+        logger.error(f"Error creating agent: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating agent: {str(e)}")
 
 async def handle_image_generation_model(request: AgentRequest, api_key: str):
     """Handle image generation models like Stable Diffusion"""
@@ -283,216 +253,114 @@ async def handle_image_generation_model(request: AgentRequest, api_key: str):
     return image_generation_response
 
 @app.post("/chat-agent")
-async def chat_with_agent(request: ChatRequest):
-    logger.info(f"Received chat request for agent: {request.agent_id}")
-    
-    # Check if agent exists
-    if request.agent_id not in conversations:
-        raise HTTPException(status_code=404, detail="Agent not found. Create an agent first.")
-    
-    together_api_key = os.getenv("TOGETHER_API_KEY")
-    if not together_api_key:
-        raise HTTPException(status_code=500, detail="Together API key not found")
-    
-    # Add user message to conversation history
-    conversations[request.agent_id]["messages"].append({"role": "user", "content": request.message})
-    
-    # Get conversation history for context
-    messages = conversations[request.agent_id]["messages"]
-    
-    # Get model information
-    model_id = conversations[request.agent_id]["model"]
-    logger.info(f"Using model for chat: {model_id}")
-    
-    # Use standard chat completions API by default
-    api_endpoint = "https://api.together.xyz/v1/chat/completions"
-    
-    # Standard chat API format
-    request_body = {
-        "model": model_id,
-        "messages": messages
-    }
-    
-    # Add model-specific parameters for other models
-    if "mixtral" in model_id.lower():
-        # Mixtral models - updated configuration
-        logger.info("Using updated configuration for Mixtral model")
-        request_body.update({
-            "temperature": 0.75,  # Slightly higher temperature for more creative responses
-            "max_tokens": 600,    # Limiting token length to encourage conciseness
-            "top_p": 0.9,
-            "stop": ["USER:", "ASSISTANT:"],  # Add stop tokens to prevent model confusion
-            "frequency_penalty": 0.2,  # Increased to reduce repetition
-            "presence_penalty": 0.4    # Increased to encourage varied language
-        })
-        
-        # Ensure the system message is properly formatted for Mixtral
-        if messages and messages[0]["role"] == "system":
-            # Modify the system message to encourage friendly, concise responses with emojis
-            original_goal = messages[0]["content"]
-            if "You are an AI assistant" not in original_goal:
-                messages[0]["content"] = f"""You are a friendly and helpful AI assistant with the following goal: {original_goal}
-                
-Important guidelines for your responses:
-1. Be friendly and conversational 
-2. Use at most 1-2 emojis per message (not more)
-3. Keep your responses concise and to the point (under 3 sentences when possible)
-4. Focus on providing direct answers first, then elaborating only if necessary
-5. Be helpful and informative while maintaining a positive tone"""
-        
-        # If this is the first user message and it's a generic "what kind of model" question
-        # Give a clear response that helps with agent identification
-        if len(messages) == 2 and messages[1]["role"] == "user":
-            user_msg = messages[1]["content"].lower()
-            if ("what" in user_msg and "model" in user_msg) or "hello" in user_msg or "hi" in user_msg:
-                # Add a meaningful first message to conversation history with emojis
-                goal_text = conversations[request.agent_id].get('goal', '')
-                goal_lower = goal_text.lower()
-                
-                # Craft a grammatically correct message based on the goal structure
-                greeting_message = ""
-                if not goal_text:
-                    greeting_message = "👋 Hello! I'm your friendly AI assistant. How can I assist you today?"
-                elif goal_lower.startswith("help") or goal_lower.startswith("assist"):
-                    greeting_message = f"👋 Hello! I'm your friendly AI assistant ready to {goal_text}. How can I help you today?"
-                elif goal_lower.startswith("create") or goal_lower.startswith("make") or goal_lower.startswith("build"):
-                    greeting_message = f"👋 Hello! I'm your friendly AI assistant ready to help you {goal_text}. What would you like to know?"
-                elif goal_lower.startswith("answer") or goal_lower.startswith("provide"):
-                    greeting_message = f"👋 Hello! I'm your friendly AI assistant ready to {goal_text}. What questions do you have?"
-                elif "plan" in goal_lower:
-                    greeting_message = f"👋 Hello! I'm your friendly AI assistant for planning {goal_text.replace('plan', '').replace('planning', '').strip()}. How can I assist you today?"
-                else:
-                    greeting_message = f"👋 Hello! I'm your friendly AI assistant for {goal_text}. I'm here to help you. How can I assist you today?"
-                
-                messages.append({
-                    "role": "assistant", 
-                    "content": greeting_message
-                })
-                
-                # Just return this message directly
-                return {
-                    "choices": [{
-                        "message": messages[-1],  # Return the last message we just created
-                        "index": 0,
-                        "finish_reason": "stop"
-                    }]
-                }
-    
-    logger.info(f"Chat API request body: {request_body}")
-    logger.info(f"Using API endpoint for chat: {api_endpoint}")
-    
+async def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:  # Increased timeout
-            response = await client.post(
-                api_endpoint,
-                headers={
-                    "Authorization": f"Bearer {together_api_key}",
-                    "Content-Type": "application/json"
-                },
-                json=request_body
-            )
-            
-            if response.status_code != 200:
-                error_text = response.text
-                logger.error(f"Error with model {model_id}: {error_text}")
+        logger.info(f"Received chat request for agent: {request.agent_id}")
+        
+        # Check if agent exists in database
+        agent = db.query(Agent).filter(Agent.id == request.agent_id).first()
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found. Create an agent first.")
+        
+        # Add user message to database
+        user_message = Message(
+            agent_id=request.agent_id,
+            role="user",
+            content=request.message
+        )
+        db.add(user_message)
+        db.commit()
+        
+        # Get all messages for context
+        messages = [
+            {"role": msg.role, "content": msg.content}
+            for msg in db.query(Message)
+            .filter(Message.agent_id == request.agent_id)
+            .order_by(Message.created_at)
+            .all()
+        ]
+        
+        # Prepare API request
+        request_body = {
+            "model": agent.model,
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 500
+        }
+        
+        # Determine API endpoint and key
+        if "openai" in agent.model.lower():
+            api_endpoint = "https://openrouter.ai/api/v1/chat/completions"
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise HTTPException(status_code=500, detail="OpenAI API key not found")
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+                "HTTP-Referer": "https://instantagent.app",
+                "X-Title": "InstantAgent"
+            }
+        else:
+            api_endpoint = "https://api.together.xyz/v1/chat/completions"
+            api_key = os.getenv("TOGETHER_API_KEY")
+            if not api_key:
+                raise HTTPException(status_code=500, detail="Together API key not found")
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}"
+            }
+        
+        logger.info(f"Making API call to {api_endpoint}")
+        
+        # Make API call
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            try:
+                response = await client.post(
+                    api_endpoint,
+                    headers=headers,
+                    json=request_body
+                )
                 
-                # Try to parse the error response to provide more helpful messages
+                response.raise_for_status()  # Raise exception for non-200 status codes
+                api_response = response.json()
+                
+                # Store assistant's response in database
+                if "choices" in api_response and len(api_response["choices"]) > 0:
+                    assistant_message = Message(
+                        agent_id=request.agent_id,
+                        role="assistant",
+                        content=api_response["choices"][0]["message"]["content"]
+                    )
+                    db.add(assistant_message)
+                    db.commit()
+                
+                return api_response
+                
+            except httpx.HTTPStatusError as e:
+                error_message = "API request failed"
                 try:
-                    error_json = response.json()
-                    if "error" in error_json:
-                        error_detail = error_json["error"].get("message", "Unknown error")
-                        if "quota" in error_detail.lower() or "rate" in error_detail.lower():
-                            detail = f"API rate limit or quota exceeded for {model_id}. Please try again later."
-                        elif "not found" in error_detail.lower() or "unavailable" in error_detail.lower():
-                            detail = f"The model {model_id} appears to be unavailable. Please try a different model."
-                        else:
-                            detail = f"Error with model {model_id}: {error_detail}"
-                    else:
-                        detail = f"Error calling Together API with model {model_id}: {error_text}"
+                    error_data = e.response.json()
+                    if "error" in error_data:
+                        error_message = error_data["error"].get("message", error_message)
                 except:
-                    detail = f"Error calling Together API with model {model_id}: {error_text}"
+                    error_message = str(e)
                 
-                raise HTTPException(status_code=response.status_code, detail=detail)
-            
-            # Get the response
-            api_response = response.json()
-            logger.info(f"Chat response structure: {list(api_response.keys())}")
-            
-            # Standard chat completions API format
-            if "choices" in api_response and len(api_response["choices"]) > 0:
-                try:
-                    assistant_message = api_response["choices"][0]["message"]
-                    conversations[request.agent_id]["messages"].append(assistant_message)
-                except (KeyError, TypeError, IndexError) as e:
-                    # Handle corrupt or unexpected response format
-                    logger.error(f"Error parsing response: {str(e)}")
-                    # Create a fallback message
-                    fallback_message = {
-                        "role": "assistant",
-                        "content": "😅 I had a small hiccup processing that. Could you try rephrasing your question? I'd love to help!"
-                    }
-                    conversations[request.agent_id]["messages"].append(fallback_message)
-                    
-                    # Modify the API response to include our fallback
-                    if "choices" in api_response:
-                        api_response["choices"][0]["message"] = fallback_message
-                    else:
-                        api_response["choices"] = [{"message": fallback_message, "index": 0, "finish_reason": "error"}]
-            
-            # Check for any other odd response formats and try to normalize them
-            if "choices" not in api_response or not api_response["choices"]:
-                logger.warning(f"No choices in response, creating fallback response")
-                fallback_message = {
-                    "role": "assistant",
-                    "content": "🤔 I think I lost my train of thought there! Let's try again - what would you like to know?"
-                }
-                api_response["choices"] = [{"message": fallback_message, "index": 0, "finish_reason": "error"}]
-                conversations[request.agent_id]["messages"].append(fallback_message)
-            
-            return api_response
-            
-    except httpx.RequestError as exc:
-        error_detail = f"HTTP Request error: {str(exc)}"
-        logger.error(error_detail)
-        
-        # Create a fallback response instead of failing completely
-        fallback_message = {
-            "role": "assistant",
-            "content": "🔄 Connection hiccup! The server seems busy right now. Let's try again in a moment - I'm eager to help you!"
-        }
-        
-        # Add the fallback message to conversation history
-        conversations[request.agent_id]["messages"].append(fallback_message)
-        
-        # Return a proper response structure with the fallback message
-        fallback_response = {
-            "choices": [{"message": fallback_message, "index": 0, "finish_reason": "error"}],
-            "model": model_id,
-            "error": error_detail
-        }
-        
-        return fallback_response
+                logger.error(f"API Error: {error_message}")
+                raise HTTPException(status_code=e.response.status_code, detail=error_message)
+                
+            except httpx.RequestError as e:
+                error_message = f"Request failed: {str(e)}"
+                logger.error(error_message)
+                raise HTTPException(status_code=500, detail=error_message)
+                
+    except HTTPException:
+        raise
     except Exception as e:
-        error_detail = f"Unexpected error: {str(e)}"
-        logger.error(error_detail)
-        
-        # Create a fallback response for general errors
-        fallback_message = {
-            "role": "assistant", 
-            "content": "⚡ Something unexpected happened! Could you try a shorter message or different wording? I'm here and ready to help! 👍"
-        }
-        
-        # Add the fallback message to conversation history
-        conversations[request.agent_id]["messages"].append(fallback_message)
-        
-        # Return a proper response structure with the fallback message
-        fallback_response = {
-            "choices": [{"message": fallback_message, "index": 0, "finish_reason": "error"}],
-            "model": model_id,
-            "error": error_detail
-        }
-        
-        return fallback_response
+        logger.error(f"Unexpected error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected error occurred: {str(e)}"
+        )
     
 class AgentNameRequest(BaseModel):
     goal: str
@@ -701,6 +569,58 @@ async def generate_image(request: ChatRequest):
         }
         
         return fallback_response
+    
+# Add new endpoint to get chat history
+@app.get("/chat-history/{agent_id}")
+async def get_chat_history(agent_id: str, db: Session = Depends(get_db)):
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    messages = db.query(Message)\
+        .filter(Message.agent_id == agent_id)\
+        .order_by(Message.created_at)\
+        .all()
+    
+    return {
+        "agent": {
+            "id": agent.id,
+            "name": agent.name,
+            "model": agent.model,
+            "goal": agent.goal,
+            "tools": agent.get_tools(),
+            "created_at": agent.created_at
+        },
+        "messages": [
+            {
+                "role": msg.role,
+                "content": msg.content,
+                "created_at": msg.created_at
+            }
+            for msg in messages
+        ]
+    }
+
+# Add endpoint to get user's agents
+@app.get("/user-agents/{user_name}")
+async def get_user_agents(user_name: str, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.name == user_name).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    agents = db.query(Agent).filter(Agent.user_id == user.id).all()
+    
+    return [
+        {
+            "id": agent.id,
+            "name": agent.name,
+            "model": agent.model,
+            "goal": agent.goal,
+            "tools": agent.get_tools(),
+            "created_at": agent.created_at
+        }
+        for agent in agents
+    ]
     
  
 

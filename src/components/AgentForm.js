@@ -1,8 +1,12 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import axios from "axios";
 
 const AgentForm = ({ onSubmit, isLoading }) => {
   const availableModels = [
-    { id: "mistralai/Mixtral-8x7B-Instruct-v0.1", name: "Mixtral 8x7B" },
+    {
+      id: "openai/gpt-3.5-turbo",
+      name: "GPT-3.5 Turbo (via OpenRouter)",
+    },
     { id: "mistralai/Mistral-7B-Instruct-v0.2", name: "Mistral 7B" },
     { id: "stabilityai/stable-diffusion-2-1", name: "Stable Diffusion 2.1" },
   ];
@@ -14,34 +18,53 @@ const AgentForm = ({ onSubmit, isLoading }) => {
     goal: "",
     model: defaultModel,
     tools: [],
+    user_name: localStorage.getItem("user_name") || "", // Get from localStorage if exists
+    specialization: "", // Add specialization field
   });
+
+  // Save user_name to localStorage when it changes
+  useEffect(() => {
+    if (formData.user_name) {
+      localStorage.setItem("user_name", formData.user_name);
+    }
+  }, [formData.user_name]);
 
   const availableTools = [
     { id: "search", name: "Search" },
     { id: "code", name: "Code Generation" },
     { id: "math", name: "Math" },
     { id: "web", name: "Web Browsing" },
+    { id: "flight_search", name: "Flight Search" },
+    { id: "maps", name: "Maps & Navigation" },
+    { id: "finance", name: "Finance & Markets" },
   ];
 
   const handleChange = (e) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
-  };
-
-  const handleToolChange = (e) => {
-    const toolId = e.target.value;
-    const isChecked = e.target.checked;
-
-    setFormData((prev) => {
-      if (isChecked) {
-        return { ...prev, tools: [...prev.tools, toolId] };
+    const { name, value, type, checked } = e.target;
+    if (type === "checkbox") {
+      let updatedTools = [...formData.tools];
+      if (checked) {
+        updatedTools.push(value);
       } else {
-        return { ...prev, tools: prev.tools.filter((t) => t !== toolId) };
+        updatedTools = updatedTools.filter((t) => t !== value);
       }
-    });
+      setFormData((prev) => ({
+        ...prev,
+        tools: updatedTools,
+      }));
+    } else if (name === "model") {
+      // When model changes, update the API key if one exists for the selected model
+      const selectedModel = availableModels.find((m) => m.id === value);
+      setFormData((prev) => ({
+        ...prev,
+        [name]: value,
+      }));
+    } else {
+      setFormData((prev) => ({
+        ...prev,
+        [name]: value,
+      }));
+    }
   };
 
   const handleSubmit = (e) => {
@@ -66,6 +89,26 @@ const AgentForm = ({ onSubmit, isLoading }) => {
       }}
     >
       <div className="mb-3">
+        <label htmlFor="user_name" className="form-label text-white">
+          Your Name:
+        </label>
+        <input
+          id="user_name"
+          name="user_name"
+          type="text"
+          className="form-control"
+          style={{
+            backgroundColor: "#343541",
+            color: "white",
+            border: "1px solid #343541",
+          }}
+          value={formData.user_name}
+          onChange={handleChange}
+          placeholder="Enter your name (optional)"
+        />
+      </div>
+
+      <div className="mb-3">
         <label htmlFor="goal" className="form-label text-white">
           Goal:
         </label>
@@ -75,16 +118,31 @@ const AgentForm = ({ onSubmit, isLoading }) => {
           className="form-control custom-textarea"
           style={inputStyle}
           value={formData.goal}
-          onChange={(e) => {
-            handleChange(e);
-            e.target.style.height = 'auto';
-            e.target.style.height = `${e.target.scrollHeight}px`;
-          }}
+          onChange={handleChange}
           placeholder="Describe the agent's goal..."
           required
           rows={1}
         />
+      </div>
 
+      <div className="mb-3">
+        <label htmlFor="specialization" className="form-label text-white">
+          Specialization:
+        </label>
+        <input
+          id="specialization"
+          name="specialization"
+          type="text"
+          className="form-control"
+          style={{
+            backgroundColor: "#343541",
+            color: "white",
+            border: "1px solid #343541",
+          }}
+          value={formData.specialization}
+          onChange={handleChange}
+          placeholder="e.g. Indian, Ancient Rome, Mathematics, etc. (optional)"
+        />
       </div>
 
       <div className="mb-3">
@@ -98,7 +156,7 @@ const AgentForm = ({ onSubmit, isLoading }) => {
             className="form-select"
             style={{
               ...inputStyle,
-              appearance: "none", // remove native arrow
+              appearance: "none",
               paddingRight: "2rem",
             }}
             value={formData.model}
@@ -111,8 +169,6 @@ const AgentForm = ({ onSubmit, isLoading }) => {
               </option>
             ))}
           </select>
-
-          {/* Dropdown Arrow */}
           <div
             style={{
               position: "absolute",
@@ -146,7 +202,7 @@ const AgentForm = ({ onSubmit, isLoading }) => {
                 id={`tool-${tool.id}`}
                 value={tool.id}
                 checked={formData.tools.includes(tool.id)}
-                onChange={handleToolChange}
+                onChange={handleChange}
               />
               <label
                 className="form-check-label text-white"

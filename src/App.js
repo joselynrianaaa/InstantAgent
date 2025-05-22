@@ -13,11 +13,107 @@ function App() {
   const [error, setError] = useState(null);
   const [activeAgent, setActiveAgent] = useState(null);
   const [showChat, setShowChat] = useState(false);
-  const [agents, setAgents] = useState([]);
-
-  const [name, setName] = useState("");
+  const [name, setName] = useState(localStorage.getItem("user_name") || "");
   const [inputValue, setInputValue] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
+
+  // Initialize agents state with user-specific storage
+  const [agents, setAgents] = useState(() => {
+    const userName = localStorage.getItem("user_name");
+    if (userName) {
+      const userAgents = localStorage.getItem(`agents_${userName}`);
+      return userAgents ? JSON.parse(userAgents) : [];
+    }
+    return [];
+  });
+
+  // Initialize chat histories for each agent
+  const [agentChats, setAgentChats] = useState(() => {
+    const userName = localStorage.getItem("user_name");
+    if (userName) {
+      const chats = localStorage.getItem(`chats_${userName}`);
+      return chats ? JSON.parse(chats) : {};
+    }
+    return {};
+  });
+
+  // Save agents to user-specific storage
+  useEffect(() => {
+    if (name) {
+      localStorage.setItem(`agents_${name}`, JSON.stringify(agents));
+    }
+  }, [agents, name]);
+
+  // Save chat histories to user-specific storage
+  useEffect(() => {
+    if (name) {
+      localStorage.setItem(`chats_${name}`, JSON.stringify(agentChats));
+    }
+  }, [agentChats, name]);
+
+  // Handle user session changes
+  useEffect(() => {
+    if (name) {
+      localStorage.setItem("user_name", name);
+      // Load user's agents
+      const userAgents = localStorage.getItem(`agents_${name}`);
+      if (userAgents) {
+        setAgents(JSON.parse(userAgents));
+      } else {
+        setAgents([]);
+      }
+      // Load user's chat histories
+      const userChats = localStorage.getItem(`chats_${name}`);
+      if (userChats) {
+        setAgentChats(JSON.parse(userChats));
+      } else {
+        setAgentChats({});
+      }
+      // Reset active agent when switching users
+      setActiveAgent(null);
+      setShowChat(false);
+    }
+  }, [name]);
+
+  const handleLogout = () => {
+    setName("");
+    setAgents([]);
+    setAgentChats({});
+    setActiveAgent(null);
+    setShowChat(false);
+    localStorage.removeItem("user_name");
+    localStorage.removeItem("activeAgent");
+    setShowDropdown(false);
+  };
+
+  // Add deleteAgent function after handleLogout
+  const deleteAgent = (agentId) => {
+    // Remove agent from agents list
+    setAgents((prevAgents) =>
+      prevAgents.filter((agent) => agent.id !== agentId)
+    );
+
+    // Remove agent's chat history
+    setAgentChats((prevChats) => {
+      const newChats = { ...prevChats };
+      delete newChats[agentId];
+      return newChats;
+    });
+
+    // If the deleted agent was active, reset the view
+    if (activeAgent === agentId) {
+      setActiveAgent(null);
+      setShowChat(false);
+    }
+  };
+
+  // Update chat history for specific agent
+  const updateAgentChat = (agentId, messages) => {
+    setAgentChats((prev) => ({
+      ...prev,
+      [agentId]: messages,
+    }));
+  };
 
   // Check API connectivity when component mounts
   useEffect(() => {
@@ -34,71 +130,52 @@ function App() {
     };
 
     checkApiConnectivity();
+
+    // Restore active agent from localStorage if it exists
+    const savedActiveAgent = localStorage.getItem("activeAgent");
+    if (savedActiveAgent) {
+      setActiveAgent(savedActiveAgent);
+      setShowChat(true);
+    }
   }, []);
+
+  // Save active agent to localStorage whenever it changes
+  useEffect(() => {
+    if (activeAgent) {
+      localStorage.setItem("activeAgent", activeAgent);
+    }
+  }, [activeAgent]);
 
   const handleSubmit = async (formData) => {
     setLoading(true);
-    setLoadingStage("Initializing agent creation...");
+    setLoadingStage("Creating your agent...");
     setError(null);
-    setShowChat(false);
-
-    // Create a timeout promise that rejects after 90 seconds
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => {
-        reject(
-          new Error(
-            "Request timed out after 90 seconds. The server may be overloaded. Try a smaller model like Mistral 7B."
-          )
-        );
-      }, 90000);
-    });
 
     try {
-      setLoadingStage(
-        "Creating agent with " + formData.model.split("/").pop() + "..."
+      // Add specialization to the goal if provided
+      let specialization = "";
+      if (formData.specialization) {
+        specialization = ` (${formData.specialization})`;
+      }
+
+      const result = await axios.post(
+        "http://localhost:8000/create-agent",
+        {
+          ...formData,
+          user_name: name, // Include user name in request
+        },
+        {
+          timeout: 30000,
+        }
       );
 
-      // Set a request timeout of 90 seconds
-      const result = await Promise.race([
-        axios.post("http://127.0.0.1:8000/create-agent", formData, {
-          timeout: 90000,
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-          },
-          onUploadProgress: () => {
-            setLoadingStage("Sending request to create agent...");
-          },
-          onDownloadProgress: () => {
-            setLoadingStage("Receiving response from server...");
-          },
-        }),
-        timeoutPromise,
-      ]);
-
-      console.log("Agent creation response:", result.data);
-
-      setResponse(result.data);
       if (result.data && result.data.agent_id) {
         setActiveAgent(result.data.agent_id);
-
-        // Simple fallback name in case the API call for naming fails
-        let fallbackName = "Custom Assistant";
-        if (formData.goal) {
-          const words = formData.goal.split(/\s+/).filter(Boolean);
-          if (words.length > 0) {
-            fallbackName =
-              words[0].charAt(0).toUpperCase() +
-              words[0].slice(1) +
-              " Assistant";
-          }
-        }
 
         // Generate agent name using LLM
         let agentName;
         try {
           setLoadingStage("Generating a name for your agent...");
-          // Set a timeout for name generation as well
           const namePromise = generateAgentNameWithLLM(formData.goal);
           agentName = await Promise.race([
             namePromise,
@@ -112,8 +189,20 @@ function App() {
           setLoadingStage("Name generated: " + agentName);
         } catch (nameError) {
           console.warn("Error generating name:", nameError);
-          agentName = fallbackName; // Use the fallback name
+          // Create a fallback name from the goal
+          const words = formData.goal.split(/\s+/).filter(Boolean);
+          agentName =
+            words.length > 0
+              ? words[0].charAt(0).toUpperCase() +
+                words[0].slice(1) +
+                " Assistant"
+              : "Custom Assistant";
           setLoadingStage("Using fallback name: " + agentName);
+        }
+
+        // Add specialization to the name if provided
+        if (formData.specialization) {
+          agentName = `${agentName} (${formData.specialization})`;
         }
 
         // Find the model name from the model ID
@@ -122,48 +211,23 @@ function App() {
           : formData.model;
 
         // Add the new agent to the list
-        setAgents((prevAgents) => [
-          ...prevAgents,
-          {
-            id: result.data.agent_id,
-            name: agentName,
-            description: formData.goal,
-            model: formData.model, // Store model ID
-            modelName: modelName, // Store friendly model name
-          },
-        ]);
+        const newAgent = {
+          id: result.data.agent_id,
+          name: agentName,
+          description: formData.goal,
+          model: formData.model,
+          modelName: modelName,
+          specialization: formData.specialization || "",
+          created_at: new Date().toISOString(),
+          user_name: name, // Store user name with agent
+        };
+
+        setAgents((prevAgents) => [...prevAgents, newAgent]);
+        setShowChat(true);
       }
     } catch (err) {
       console.error("Error creating agent:", err);
-
-      let errorMessage;
-      if (err.message && err.message.includes("timeout")) {
-        // Handle timeout errors specifically
-        errorMessage =
-          "The request timed out. The server might be busy or the model might be too large. Try again or choose a smaller model.";
-      } else if (err.response) {
-        // Server responded with an error code
-        if (err.response.status === 500) {
-          errorMessage =
-            "Server error: The model might be unavailable or the API key might be invalid.";
-        } else {
-          errorMessage =
-            err.response.data.detail ||
-            (typeof err.response.data === "object"
-              ? JSON.stringify(err.response.data)
-              : err.response.data) ||
-            `Server error: ${err.response.status}`;
-        }
-      } else if (err.request) {
-        // No response received
-        errorMessage =
-          "No response from server. Please check if the backend is running at http://127.0.0.1:8000";
-      } else {
-        // Something else went wrong
-        errorMessage = err.message || "An unknown error occurred";
-      }
-
-      setError(errorMessage);
+      setError(err.response?.data?.detail || err.message);
     } finally {
       setLoading(false);
       setLoadingStage("");
@@ -171,16 +235,22 @@ function App() {
   };
 
   const handleStartChat = () => {
-    // Find the current agent's details to pass to ChatComponent
     const currentAgent = agents.find((agent) => agent.id === activeAgent);
-    setShowChat(true);
+    if (currentAgent) {
+      setShowChat(true);
+    }
   };
 
   const handleAgentSelect = (agentId) => {
     setActiveAgent(agentId);
-    // Find the selected agent's details to pass to ChatComponent
     const selectedAgent = agents.find((agent) => agent.id === agentId);
-    setShowChat(true);
+    if (selectedAgent) {
+      setShowChat(true);
+    }
+  };
+
+  const handleBackToCreate = () => {
+    setShowChat(false);
   };
 
   // Function to generate agent name using the Together API
@@ -248,11 +318,7 @@ function App() {
             fontFamily: "'Poppins', sans-serif",
           }}
         >
-<<<<<<< HEAD
           InstantAgent
-=======
-          Instant Agent Creator
->>>>>>> 534f71fa8663de757c6cb9584f1ec348b9fc1afb
         </h1>
 
         {/* Name Dropdown Badge */}
@@ -278,7 +344,7 @@ function App() {
               gap: "0.5rem",
             }}
           >
-            <span>{name || "Your Name"}</span>
+            <span>{name || "Sign In"}</span>
             <span style={{ fontSize: "1rem" }}>▼</span>
           </div>
 
@@ -297,37 +363,55 @@ function App() {
                 width: "200px",
               }}
             >
-              <label
-                htmlFor="nameInput"
-                style={{
-                  display: "block",
-                  marginBottom: "0.5rem",
-                  fontWeight: 500,
-                }}
-              >
-                Enter your name:
-              </label>
-              <input
-                id="nameInput"
-                type="text"
-                className="form-control"
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                placeholder="e.g. Thikkaloude"
-              />
-              <button
-                className="btn btn-primary mt-2"
-                style={{ width: "100%" }}
-                onClick={() => {
-                  const trimmed = inputValue.trim();
-                  if (trimmed) {
-                    setName(trimmed);
-                    setShowDropdown(false);
-                  }
-                }}
-              >
-                Save
-              </button>
+              {name ? (
+                <>
+                  <div style={{ marginBottom: "1rem", fontWeight: "500" }}>
+                    Signed in as: {name}
+                  </div>
+                  <button
+                    className="btn btn-danger"
+                    style={{ width: "100%" }}
+                    onClick={handleLogout}
+                  >
+                    Sign Out
+                  </button>
+                </>
+              ) : (
+                <>
+                  <label
+                    htmlFor="nameInput"
+                    style={{
+                      display: "block",
+                      marginBottom: "0.5rem",
+                      fontWeight: 500,
+                    }}
+                  >
+                    Enter your name:
+                  </label>
+                  <input
+                    id="nameInput"
+                    type="text"
+                    className="form-control"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    placeholder="e.g. Manjul"
+                  />
+                  <button
+                    className="btn btn-primary mt-2"
+                    style={{ width: "100%" }}
+                    onClick={() => {
+                      const trimmed = inputValue.trim();
+                      if (trimmed) {
+                        setName(trimmed);
+                        setShowDropdown(false);
+                        setInputValue("");
+                      }
+                    }}
+                  >
+                    Sign In
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -338,6 +422,7 @@ function App() {
         agents={agents}
         activeAgent={activeAgent}
         onAgentSelect={handleAgentSelect}
+        onDeleteAgent={deleteAgent}
       />
 
       {/* Main Content */}
@@ -441,7 +526,7 @@ function App() {
             <div className="d-flex justify-content-between align-items-center mb-3">
               <button
                 className="btn btn-secondary"
-                onClick={() => setShowChat(false)}
+                onClick={handleBackToCreate}
                 style={{
                   backgroundColor: "#3a3a3a",
                   border: "none",
@@ -462,6 +547,10 @@ function App() {
             <ChatComponent
               agentId={activeAgent}
               agentDetails={agents.find((agent) => agent.id === activeAgent)}
+              initialMessages={agentChats[activeAgent] || []}
+              onUpdateMessages={(messages) =>
+                updateAgentChat(activeAgent, messages)
+              }
             />
           </div>
         )}
