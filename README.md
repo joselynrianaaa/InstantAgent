@@ -1,12 +1,12 @@
 # InstantAgent
 
-A web application for creating AI agents using Together AI's API.
+InstantAgent is a web application designed to facilitate the creation of AI agents using Together AI's API. This tool empowers users to build and deploy intelligent agents tailored to specific tasks, leveraging the capabilities of advanced language models.
 
 ## Features
 
-- Create agents with customizable goals, models, and tools
-- Responsive Bootstrap UI
-- Real-time API response display
+- Customizable Agent Creation: Define agent goals, select appropriate models, and integrate necessary tools to suit specific tasks.
+- Built with Bootstrap, ensuring a seamless experience across devices.
+- View live responses from the Together AI API, enhancing the development and debugging process.
 
 ## Requirements
 
